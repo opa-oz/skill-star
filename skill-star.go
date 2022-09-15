@@ -1,7 +1,6 @@
 package skill_star
 
 import (
-	"fmt"
 	"github.com/llgcode/draw2d/draw2dimg"
 	"github.com/teacat/noire"
 	"image"
@@ -80,8 +79,8 @@ func lightenDarkenColor(clr color.RGBA, amount float64) color.RGBA {
 	c := noire.NewRGB(float64(r/255), float64(g/255), float64(b/255))
 	newR, newG, newB := c.Lighten(amount).RGB()
 
-	fmt.Println(r, g, b)
-	fmt.Println(newR, newG, newB)
+	//fmt.Println(r, g, b)
+	//fmt.Println(newR, newG, newB)
 
 	return color.RGBA{R: uint8(newR), G: uint8(newG), B: uint8(newB), A: uint8(a)}
 }
@@ -97,7 +96,91 @@ func drawCanvas(width int, height int, backgroundColor color.Color) *image.RGBA 
 	return img
 }
 
-func GenerateSkillStar(cfg SkillsConfig, imageCfg ImageConfig, person Person) image.RGBA {
+type Mask struct {
+	bounds image.Rectangle
+	width  int
+	height int
+}
+
+func (c Mask) Prepare() (*draw2dimg.GraphicContext, image.RGBA) {
+	shapeImg := image.NewRGBA(image.Rectangle{Min: image.Point{}, Max: image.Point{X: c.width, Y: c.height}})
+	gc := draw2dimg.NewGraphicContext(shapeImg)
+
+	return gc, *shapeImg
+}
+
+func (c Mask) Draw(targetImage *image.RGBA, gc *draw2dimg.GraphicContext, img *image.RGBA, transparency uint8) *image.RGBA {
+	maskImage := drawCanvas(c.width, c.height, color.RGBA{R: transparency, G: transparency, B: transparency, A: 0xff})
+
+	bounds := c.bounds
+	mask := image.NewAlpha(bounds)
+	for x := 0; x < bounds.Dx(); x++ {
+		for y := 0; y < bounds.Dy(); y++ {
+			//get one of r, g, b on the mask image ...
+			r, _, _, _ := maskImage.At(x, y).RGBA()
+			//... and set it as the alpha value on the mask.
+			mask.SetAlpha(x, y, color.Alpha{A: uint8(255 - r)}) //Assuming that white is your transparency, subtract it from 255
+		}
+	}
+
+	m := image.NewRGBA(bounds)
+	draw.Draw(m, m.Bounds(), targetImage, image.Point{}, draw.Src)
+	draw.DrawMask(m, bounds, img, image.Point{}, mask, image.Point{}, draw.Over)
+
+	return m
+}
+
+func drawSkillsShape(img *image.RGBA, shape []poorPoint, lightenColor color.Color, imageCfg ImageConfig) *image.RGBA {
+	mask := Mask{bounds: img.Bounds(), width: imageCfg.Width, height: imageCfg.Height}
+	gcc, shapeImg := mask.Prepare()
+
+	gcc.SetStrokeColor(imageCfg.PersonColor)
+	gcc.SetFillColor(lightenColor)
+	gcc.SetLineWidth(4)
+
+	gcc.BeginPath()
+
+	for i, point := range shape {
+		if i == 0 {
+			gcc.MoveTo(point.x, point.y)
+		} else {
+			gcc.LineTo(point.x, point.y)
+		}
+	}
+
+	gcc.Close()
+	gcc.Stroke()
+
+	img = mask.Draw(img, gcc, &shapeImg, 10)
+
+	return img
+}
+
+func drawSkillsStroke(img *image.RGBA, shape []poorPoint, lightenColor color.Color, imageCfg ImageConfig) *image.RGBA {
+	mask := Mask{bounds: img.Bounds(), width: imageCfg.Width, height: imageCfg.Height}
+	gcc, shapeImg := mask.Prepare()
+
+	gcc.SetFillColor(lightenColor)
+	gcc.SetStrokeColor(lightenColor)
+
+	gcc.BeginPath()
+
+	for i, point := range shape {
+		if i == 0 {
+			gcc.MoveTo(point.x, point.y)
+		} else {
+			gcc.LineTo(point.x, point.y)
+		}
+	}
+
+	gcc.Close()
+	gcc.FillStroke()
+
+	img = mask.Draw(img, gcc, &shapeImg, 120)
+	return img
+}
+
+func GenerateSkillStar(cfg SkillsConfig, imageCfg ImageConfig, person Person) image.Image {
 	img := drawCanvas(imageCfg.Width, imageCfg.Height, imageCfg.BackgroundColor)
 
 	gc := draw2dimg.NewGraphicContext(img)
@@ -135,94 +218,26 @@ func GenerateSkillStar(cfg SkillsConfig, imageCfg ImageConfig, person Person) im
 		gc.Stroke()
 	}
 
-	for i := 0; i < len(mainPoints[0]); i++ {
+	target := len(mainPoints) - 1
+
+	for i := 0; i < len(mainPoints[target]); i++ {
 		gc.BeginPath()
 		gc.MoveTo(middleX, middleY)
-		gc.LineTo(mainPoints[0][i].x, mainPoints[0][i].y)
+		gc.LineTo(mainPoints[target][i].x, mainPoints[target][i].y)
 		gc.Stroke()
 	}
-
-	shapeImg := image.NewRGBA(image.Rectangle{Min: image.Point{}, Max: image.Point{X: imageCfg.Width, Y: imageCfg.Height}})
-
-	gcc := draw2dimg.NewGraphicContext(shapeImg)
-
-	lightenColor := lightenDarkenColor(imageCfg.PersonColor, 0.02)
-
-	gcc.SetStrokeColor(imageCfg.PersonColor)
-	gcc.SetFillColor(lightenColor)
-	gcc.SetLineWidth(4)
-
-	gcc.BeginPath()
 
 	var shape []poorPoint
 
 	for i, value := range person.SkillsValues {
 		point := mainPoints[value][i]
-
 		shape = append(shape, point)
-
-		if i == 0 {
-			gcc.MoveTo(point.x, point.y)
-		} else {
-			gcc.LineTo(point.x, point.y)
-		}
 	}
 
-	gcc.Close()
-	gcc.Stroke()
+	lightenColor := lightenDarkenColor(imageCfg.PersonColor, 0.02)
 
-	maskImage := drawCanvas(imageCfg.Width, imageCfg.Height, color.RGBA{R: 10, G: 10, B: 10, A: 0xff})
+	img = drawSkillsShape(img, shape, lightenColor, imageCfg)
+	img = drawSkillsStroke(img, shape, lightenColor, imageCfg)
 
-	bounds := img.Bounds() //you have defined that both src and mask are same size, and maskImg is a grayscale of the src image. So we'll use that common size.
-	mask := image.NewAlpha(bounds)
-	for x := 0; x < bounds.Dx(); x++ {
-		for y := 0; y < bounds.Dy(); y++ {
-			//get one of r, g, b on the mask image ...
-			r, _, _, _ := maskImage.At(x, y).RGBA()
-			//... and set it as the alpha value on the mask.
-			mask.SetAlpha(x, y, color.Alpha{A: uint8(255 - r)}) //Assuming that white is your transparency, subtract it from 255
-		}
-	}
-
-	m := image.NewRGBA(bounds)
-	draw.Draw(m, m.Bounds(), img, image.Point{}, draw.Src)
-
-	draw.DrawMask(m, bounds, shapeImg, image.Point{}, mask, image.Point{}, draw.Over)
-
-	shapeImg2 := image.NewRGBA(image.Rectangle{Min: image.Point{}, Max: image.Point{X: imageCfg.Width, Y: imageCfg.Height}})
-	gcc2 := draw2dimg.NewGraphicContext(shapeImg2)
-
-	gcc2.SetFillColor(lightenColor)
-	gcc2.SetStrokeColor(lightenColor)
-
-	gcc2.BeginPath()
-
-	for i, point := range shape {
-		if i == 0 {
-			gcc2.MoveTo(point.x, point.y)
-		} else {
-			gcc2.LineTo(point.x, point.y)
-		}
-	}
-
-	gcc2.Close()
-	gcc2.FillStroke()
-
-	maskImage2 := drawCanvas(imageCfg.Width, imageCfg.Height, color.RGBA{R: 120, G: 120, B: 120, A: 0xff})
-
-	mask2 := image.NewAlpha(bounds)
-	for x := 0; x < bounds.Dx(); x++ {
-		for y := 0; y < bounds.Dy(); y++ {
-			//get one of r, g, b on the mask image ...
-			r, _, _, _ := maskImage2.At(x, y).RGBA()
-			//... and set it as the alpha value on the mask.
-			mask2.SetAlpha(x, y, color.Alpha{A: uint8(255 - r)}) //Assuming that white is your transparency, subtract it from 255
-		}
-	}
-
-	m2 := image.NewRGBA(bounds)
-	draw.Draw(m2, m2.Bounds(), m, image.Point{}, draw.Src)
-	draw.DrawMask(m2, bounds, shapeImg2, image.Point{}, mask2, image.Point{}, draw.Over)
-
-	return *m2
+	return img
 }
